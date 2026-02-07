@@ -2,3 +2,4 @@
     - ocr
     - manim int
     - duck duck go
+    - yt recommendation
