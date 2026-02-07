@@ -19,6 +19,8 @@ from langchain.tools import tool
 from langgraph.graph import START, END, StateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.checkpoint.memory import InMemorySaver
+from langchain_community.tools import DuckDuckGoSearchRun
+
 
 # globals
 
@@ -59,7 +61,7 @@ def get_pdf_collection():
     return f"pdf_{current_thread_id}"
 
 
-def get_yt_collection()
+def get_yt_collection():
     """Get collection name for YouTube transcripts in current session."""
     return f"yt_{current_thread_id}"
 
@@ -244,6 +246,28 @@ def search_pdf(query: str):
 
     return {"content": context}
 
+@tool
+def recommend_youtube(topic: str) -> dict:
+    """
+    Recommend YouTube videos for a given topic.
+    """
+
+    search = DuckDuckGoSearchRun()
+
+    print(f"give topic is : {topic}")
+
+    query = f"site:youtube.com/watch {topic}"
+
+    results = search.run(query)
+
+    print(f"result : {results}")
+
+
+    return {
+        "topic": topic,
+        "recommendations": results
+    }
+
 
 @tool
 def search_youtube(query: str):
@@ -274,7 +298,9 @@ def search_youtube(query: str):
     return {"content": context}
 
 
-tools = [search_pdf, search_youtube]
+search = DuckDuckGoSearchRun()
+
+tools = [search_pdf, search_youtube, search, recommend_youtube]
 
 llm_with_tools = llm.bind_tools(tools)
 
@@ -319,6 +345,4 @@ graph.add_edge("tools", "chat")
 chatbot = graph.compile(
     checkpointer=InMemorySaver()
 )
-
-
 

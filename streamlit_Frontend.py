@@ -257,6 +257,8 @@ def load_chat(thread_id):
     Load messages from LangGraph state
     and normalize them for UI rendering
     """
+
+    
     messages = chatbot.get_state(
         config={"configurable": {"thread_id": thread_id}}
     ).values.get("messages", [])

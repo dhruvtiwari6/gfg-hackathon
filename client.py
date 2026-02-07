@@ -162,7 +162,7 @@ async def main():
             "MANIM RULES:\n"
             "- Use 'from manim import *'\n"
             "- Always use 3D coordinates: [x, y, 0]\n"
-            "- When creating a Decision Boundary, use a Line or a FunctionGraph.\n"
+            "- When creating a Decision Boundary, use a Line or a FunctionGraph. that should be dividing the points not passing through them\n"
             "- Use VGroup(*[mobs]) (unpack the list).\n"
             "- Keep animations concise. The tool adds a final wait to match narration."
         ))
