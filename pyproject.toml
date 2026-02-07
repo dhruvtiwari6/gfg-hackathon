@@ -1,0 +1,24 @@
+[project]
+name = "gfg"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "ddgs>=9.10.0",
+    "duckduckgo-search>=8.1.1",
+    "faiss-cpu>=1.13.2",
+    "fastmcp>=2.14.5",
+    "gtts>=2.5.4",
+    "langchain>=1.2.8",
+    "langchain-community>=0.4.1",
+    "langchain-google-genai>=4.2.0",
+    "langchain-mcp-adapters>=0.2.1",
+    "langchain-nvidia-ai-endpoints>=1.0.3",
+    "langchain-openai>=1.1.7",
+    "manim>=0.19.2",
+    "playwright>=1.58.0",
+    "pypdf>=6.6.2",
+    "python-dotenv>=1.2.1",
+    "youtube-transcript-api>=1.2.4",
+]
