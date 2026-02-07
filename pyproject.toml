@@ -16,9 +16,11 @@ dependencies = [
     "langchain-mcp-adapters>=0.2.1",
     "langchain-nvidia-ai-endpoints>=1.0.3",
     "langchain-openai>=1.1.7",
+    "langchain-qdrant>=1.1.0",
     "manim>=0.19.2",
     "playwright>=1.58.0",
     "pypdf>=6.6.2",
     "python-dotenv>=1.2.1",
+    "streamlit>=1.54.0",
     "youtube-transcript-api>=1.2.4",
 ]
