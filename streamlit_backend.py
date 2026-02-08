@@ -20,7 +20,11 @@ from langgraph.graph import START, END, StateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.checkpoint.memory import InMemorySaver
 from langchain_community.tools import DuckDuckGoSearchRun
+from langchain_community.utilities import GoogleSerperAPIWrapper
+from urllib.parse import urlparse, parse_qs
 
+
+import requests
 
 # globals
 
@@ -94,50 +98,276 @@ def get_vector_store(collection_name):
         collection_name=collection_name
     )
 
-# pdf ingestion
+
+
+
+def extract_video_id(url: str) -> str:
+
+    parsed = urlparse(url)
+
+    if "youtube.com" in parsed.netloc:
+        vid = parse_qs(parsed.query).get("v")
+        if vid:
+            return vid[0]
+
+    if "youtu.be" in parsed.netloc:
+        return parsed.path.lstrip("/")
+    
+
+
+# # pdf ingestion
+# def ingest_pdf(uploaded_file):
+#     """
+#     Get or create a Qdrant vector store for the given collection.
+    
+#     Args:
+#         collection_name: Name of the collection to retrieve or create
+        
+#     Returns:
+#         QdrantVectorStore instance
+#     """
+#     init_session()
+
+#     tmp_path = None
+
+#     try:
+#         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as f:
+#             f.write(uploaded_file.read())
+#             tmp_path = f.name
+
+#         loader = PyPDFLoader(tmp_path)
+#         docs = loader.load()
+
+#         splits = splitter.split_documents(docs)
+
+#         splits = [d for d in splits if d.page_content.strip()]
+
+#         if not splits:
+#             raise ValueError("No text in PDF")
+
+#         collection = get_pdf_collection()
+
+#         store = get_vector_store(collection)
+
+#         store.add_documents(splits)
+
+#         vector_stores[collection] = store
+
+#         retrieved = store.similarity_search("what is the topic of pdf", k=5)
+
+#         context = "\n\n".join(d.page_content for d in retrieved)
+
+#                 # 🤖 Ask LLM
+#         prompt = f"""
+#         Answer the question using only the context below.
+
+#         Context:
+#         {context}
+
+#         Question:
+#         {"topic of the pdf"}
+#         """
+
+#         response = llm.invoke(prompt)
+#         print(response.content)
+
+#         url = "https://google.serper.dev/videos"
+
+#         payload = {"q": response.content}
+
+#         headers = {
+#             "X-API-KEY": "1b3dcdb7ee679d34ce513e2a1177db3f81144a32",
+#             "Content-Type": "application/json"
+#         }
+
+#         res = requests.post(url, json=payload, headers=headers)
+#         data = res.json()
+
+#         videos = data.get("videos", [])
+
+#         formatted = []
+
+#         for v in videos[:5]:  # limit results
+#             formatted.append({
+#                 "title": v.get("title"),
+#                 "link": v.get("link"),
+#                 "channel": v.get("channel"),
+#                 "duration": v.get("duration"),
+#             })
+
+#         for video in videos:
+
+#             url = video.get("link")
+
+#             if not url:
+#                 continue
+
+#             video_id = extract_video_id(url)
+
+#             if not video_id:
+#                 continue
+
+#             try:
+#                 transcript = YouTubeTranscriptApi().fetch(
+#                     video_id,
+#                     languages=["en"]
+#                 )
+
+#                 text_parts = []
+
+#                 for item in transcript:
+#                     text = item.get("text", "").strip()
+
+#                     if text:
+#                         text_parts.append(text)
+
+#                 full_text = " ".join(text_parts)
+
+#                 if not full_text:
+#                     raise ValueError("Empty transcript")
+
+#                 docs = splitter.create_documents([full_text])
+
+#                 collection = get_yt_collection()
+
+#                 store = get_vector_store(collection)
+#                 store.add_documents(docs)
+
+#                 vector_stores[collection] = store
+
+#                 success.append(video_id)
+
+#                 print(f"✅ Ingested {video_id}")
+    
+#         return len(splits)
+
+#     finally:
+#         if tmp_path:
+#             os.unlink(tmp_path)
+
+
+import os
+import tempfile
+import requests
+from youtube_transcript_api import YouTubeTranscriptApi
+
+# ... existing imports for langchain, qdrant, etc ...
+
 def ingest_pdf(uploaded_file):
     """
-    Get or create a Qdrant vector store for the given collection.
-    
-    Args:
-        collection_name: Name of the collection to retrieve or create
-        
-    Returns:
-        QdrantVectorStore instance
+    Ingest PDF and related YouTube videos into Qdrant vector store.
     """
     init_session()
-
     tmp_path = None
 
     try:
+        # 1. Ingest PDF
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as f:
             f.write(uploaded_file.read())
             tmp_path = f.name
 
         loader = PyPDFLoader(tmp_path)
         docs = loader.load()
-
         splits = splitter.split_documents(docs)
-
         splits = [d for d in splits if d.page_content.strip()]
 
         if not splits:
             raise ValueError("No text in PDF")
 
-        collection = get_pdf_collection()
+        # Store PDF embeddings
+        pdf_collection_name = get_pdf_collection()
+        pdf_store = get_vector_store(pdf_collection_name)
+        pdf_store.add_documents(splits)
+        vector_stores[pdf_collection_name] = pdf_store
 
-        store = get_vector_store(collection)
+        # 2. Search for Context
+        retrieved = pdf_store.similarity_search("what is the topic of pdf", k=5)
+        context = "\n\n".join(d.page_content for d in retrieved)
 
-        store.add_documents(splits)
+        # 🤖 Ask LLM for Topic
+        prompt = f"""
+        Answer the question using only the context below.
+        Context: {context}
+        Question: "topic of the pdf"
+        """
+        response = llm.invoke(prompt)
+        topic = response.content
+        print(f"Topic identified: {topic}")
 
-        vector_stores[collection] = store
+        # 3. Fetch Related Videos
+        url = "https://google.serper.dev/videos"
+        payload = {"q": topic}
+        headers = {
+            "X-API-KEY": "1b3dcdb7ee679d34ce513e2a1177db3f81144a32",
+            "Content-Type": "application/json"
+        }
 
+        res = requests.post(url, json=payload, headers=headers)
+        videos = res.json().get("videos", [])
+
+        cnt = 0
+        # 4. Ingest Videos
+        for video in videos:
+            print(f"video topis : {video.get('title')}")
+            video_url = video.get("link")
+            if not video_url:
+                continue
+
+            video_id = extract_video_id(video_url)
+            if not video_id:
+                continue
+
+            try:
+                transcript = YouTubeTranscriptApi().fetch(video_id, languages=["en"])
+                print("dsklf;asdfj;a : {transcript}")                
+                # Combine transcript into one text block or keeping parts based on preference
+                text_parts = []
+                for t in transcript:
+                    if isinstance(t, dict):
+                        text_content = t.get("text", "")
+                    else:
+                        text_content = getattr(t, 'text', "")
+                    
+                    if text_content:  # Skip empty strings
+                        text_parts.append(str(text_content))
+                
+                text = " ".join(text_parts)
+
+
+                # Create Documents
+                video_docs = splitter.create_documents([text])
+
+                # --- CHANGE START ---
+                # Use video_id to create a unique collection key
+                # This effectively "appends" this video's store to your dictionary
+                
+                # Option A: Unique collection per video (Separated Data)
+                yt_collection_name = f"yt_{video_id}"
+                
+                # Option B: Shared collection (Aggregated Data), but keyed by ID in dict
+                # yt_collection_name = get_yt_collection() 
+
+                yt_store = get_vector_store(yt_collection_name)
+                yt_store.add_documents(video_docs)
+
+                # Store in dictionary using video_id instead of appending to 'success' list
+                vector_stores[yt_collection_name] = yt_store
+                
+                print(f"✅ Ingested video: {video_id} into collection: {yt_collection_name}")
+                cnt=cnt+1
+                # --- CHANGE END 
+                if(cnt > 2):
+                    break
+
+            except Exception as e:
+                print(f"Skipping video {video_id}: {e}")
+                continue
+    
         return len(splits)
 
     finally:
-        if tmp_path:
+        if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
-
 
 # youtube ingestion
 def ingest_youtube(video_id):
@@ -246,26 +476,40 @@ def search_pdf(query: str):
 
     return {"content": context}
 
+
 @tool
 def recommend_youtube(topic: str) -> dict:
     """
     Recommend YouTube videos for a given topic.
     """
 
-    search = DuckDuckGoSearchRun()
+    url = "https://google.serper.dev/videos"
 
-    print(f"give topic is : {topic}")
+    payload = {"q": topic}
 
-    query = f"site:youtube.com/watch {topic}"
+    headers = {
+        "X-API-KEY": "1b3dcdb7ee679d34ce513e2a1177db3f81144a32",
+        "Content-Type": "application/json"
+    }
 
-    results = search.run(query)
+    res = requests.post(url, json=payload, headers=headers)
+    data = res.json()
 
-    print(f"result : {results}")
+    videos = data.get("videos", [])
 
+    formatted = []
+
+    for v in videos[:5]:  # limit results
+        formatted.append({
+            "title": v.get("title"),
+            "link": v.get("link"),
+            "channel": v.get("channel"),
+            "duration": v.get("duration"),
+        })
 
     return {
         "topic": topic,
-        "recommendations": results
+        "results": formatted
     }
 
 
@@ -345,4 +589,5 @@ graph.add_edge("tools", "chat")
 chatbot = graph.compile(
     checkpointer=InMemorySaver()
 )
+
 

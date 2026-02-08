@@ -1,3 +1,4 @@
+import collections
 from fastapi import FastAPI, UploadFile, File, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -26,6 +27,12 @@ from langgraph.prebuilt import ToolNode
 from langgraph.checkpoint.memory import InMemorySaver
 from langchain_community.tools import DuckDuckGoSearchRun
 from langchain_core.messages import HumanMessage, AIMessage
+
+from langchain_community.utilities import GoogleSerperAPIWrapper
+from urllib.parse import urlparse, parse_qs
+
+
+import requests
 
 # ============================================================================
 # FASTAPI APP SETUP
@@ -172,34 +179,98 @@ def search_all_collections(collections: List[str], query: str, k: int = 4):
     return all_results[:k * 2]  # Return up to k*2 results total
 
 
+# def ingest_pdf_file(file_content: bytes, filename: str, thread_id: str) -> Dict[str, Any]:
+#     """Ingest a single PDF file"""
+#     doc_id = str(uuid.uuid4())[:8]  # Short ID
+#     tmp_path = None
+
+#     print("Thread ID:", thread_id)
+#     print("File:", filename)
+#     # print(file_content)
+
+#     try:
+#         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as f:
+#             f.write(file_content)
+#             tmp_path = f.name
+        
+#         loader = PyPDFLoader(tmp_path)
+#         docs = loader.load()
+#         splits = splitter.split_documents(docs)
+#         splits = [d for d in splits if d.page_content.strip()]
+        
+#         if not splits:
+#             raise ValueError("No text content found in PDF")
+        
+#         collection = get_collection_name(thread_id, "pdf", doc_id)
+#         store = get_vector_store(collection)
+#         store.add_documents(splits)
+#         vector_stores[collection] = store
+        
+#         # Store document info
+#         doc_info = {
+#             "doc_id": doc_id,
+#             "filename": filename,
+#             "chunks": len(splits),
+#             "collection": collection
+#         }
+
+#         # if thread_id not in sessions:
+#         sessions[thread_id] = {"pdf_docs": []}
+#         sessions[thread_id]["pdf_docs"].append(doc_info)
+        
+#         return {
+#             "doc_id": doc_id,
+#             "chunks": len(splits),
+#             "total_pdfs": len(sessions[thread_id]["pdf_docs"])
+#         }
+#     except Exception as e:
+#         raise ValueError(f"Failed to ingest PDF file: {str(e)}")
+#     finally:
+#         if tmp_path and os.path.exists(tmp_path):
+#             os.unlink(tmp_path)
+
+
+def extract_video_id(url: str) -> str:
+
+    parsed = urlparse(url)
+
+    if "youtube.com" in parsed.netloc:
+        vid = parse_qs(parsed.query).get("v")
+        if vid:
+            return vid[0]
+
+    if "youtu.be" in parsed.netloc:
+        return parsed.path.lstrip("/")
+
+
 def ingest_pdf_file(file_content: bytes, filename: str, thread_id: str) -> Dict[str, Any]:
-    """Ingest a single PDF file"""
-    doc_id = str(uuid.uuid4())[:8]  # Short ID
+    """
+    Ingest PDF and related YouTube videos into Qdrant vector store.
+    """
+    doc_id = str(uuid.uuid4())[:8]
     tmp_path = None
 
-    print("Thread ID:", thread_id)
-    print("File:", filename)
-    # print(file_content)
-
     try:
+        # 1. Ingest PDF
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as f:
             f.write(file_content)
             tmp_path = f.name
         
+
         loader = PyPDFLoader(tmp_path)
         docs = loader.load()
         splits = splitter.split_documents(docs)
         splits = [d for d in splits if d.page_content.strip()]
-        
+
         if not splits:
-            raise ValueError("No text content found in PDF")
-        
+            raise ValueError("No text in PDF")
+
+        # Store PDF embeddings
         collection = get_collection_name(thread_id, "pdf", doc_id)
-        store = get_vector_store(collection)
-        store.add_documents(splits)
-        vector_stores[collection] = store
-        
-        # Store document info
+        pdf_store = get_vector_store(collection)
+        pdf_store.add_documents(splits)
+        vector_stores[collection] = pdf_store
+
         doc_info = {
             "doc_id": doc_id,
             "filename": filename,
@@ -211,16 +282,101 @@ def ingest_pdf_file(file_content: bytes, filename: str, thread_id: str) -> Dict[
         sessions[thread_id] = {"pdf_docs": []}
         sessions[thread_id]["pdf_docs"].append(doc_info)
         
+      
+
+        # 2. Search for Context
+        retrieved = pdf_store.similarity_search("what is the topic of pdf", k=5)
+        context = "\n\n".join(d.page_content for d in retrieved)
+
+        # 🤖 Ask LLM for Topic
+        prompt = f"""
+        Answer the question using only the context below.
+        Context: {context}
+        Question: "topic of the pdf"
+        """
+        response = llm.invoke(prompt)
+        topic = response.content
+        print(f"Topic identified: {topic}")
+
+        # 3. Fetch Related Videos
+        url = "https://google.serper.dev/videos"
+        payload = {"q": topic}
+        headers = {
+            "X-API-KEY": "1b3dcdb7ee679d34ce513e2a1177db3f81144a32",
+            "Content-Type": "application/json"
+        }
+
+        res = requests.post(url, json=payload, headers=headers)
+        videos = res.json().get("videos", [])
+
+        cnt = 0
+        # 4. Ingest Videos
+        for video in videos:
+            print(f"video topis : {video.get('title')}")
+            video_url = video.get("link")
+            if not video_url:
+                continue
+
+            video_id = extract_video_id(video_url)
+            if not video_id:
+                continue
+
+            try:
+                transcript = YouTubeTranscriptApi().fetch(video_id, languages=["en"])
+                print("dsklf;asdfj;a : {transcript}")                
+                # Combine transcript into one text block or keeping parts based on preference
+                text_parts = []
+                for t in transcript:
+                    if isinstance(t, dict):
+                        text_content = t.get("text", "")
+                    else:
+                        text_content = getattr(t, 'text', "")
+                    
+                    if text_content:  # Skip empty strings
+                        text_parts.append(str(text_content))
+                
+                text = " ".join(text_parts)
+
+
+                # Create Documents
+                video_docs = splitter.create_documents([text])
+
+                # --- CHANGE START ---
+                # Use video_id to create a unique collection key
+                # This effectively "appends" this video's store to your dictionary
+                
+                # Option A: Unique collection per video (Separated Data)
+                yt_collection_name = f"yt_{video_id}"
+                
+                # Option B: Shared collection (Aggregated Data), but keyed by ID in dict
+                # yt_collection_name = get_yt_collection() 
+
+                yt_store = get_vector_store(yt_collection_name)
+                yt_store.add_documents(video_docs)
+
+                # Store in dictionary using video_id instead of appending to 'success' list
+                vector_stores[yt_collection_name] = yt_store
+                
+                print(f"✅ Ingested video: {video_id} into collection: {yt_collection_name}")
+                cnt=cnt+1
+                # --- CHANGE END 
+                if(cnt > 2):
+                    break
+
+            except Exception as e:
+                print(f"Skipping video {video_id}: {e}")
+                continue
+    
         return {
             "doc_id": doc_id,
             "chunks": len(splits),
             "total_pdfs": len(sessions[thread_id]["pdf_docs"])
         }
-    except Exception as e:
-        raise ValueError(f"Failed to ingest PDF file: {str(e)}")
+
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
+
 
 def ingest_youtube_video(video_id: str, title: Optional[str], thread_id: str) -> Dict[str, Any]:
     """Ingest a YouTube video transcript"""
@@ -327,18 +483,42 @@ def search_youtube(query: str) -> dict:
 
 @tool
 def recommend_youtube(topic: str) -> dict:
-    """Recommend YouTube videos for a given topic."""
-    search = DuckDuckGoSearchRun()
-    query = f"site:youtube.com/watch {topic}"
-    
-    try:
-        results = search.run(query)
-        return {"topic": topic, "recommendations": results}
-    except Exception as e:
-        return {"topic": topic, "recommendations": f"Error: {str(e)}"}
+    """
+    Recommend YouTube videos for a given topic.
+    """
+
+    url = "https://google.serper.dev/videos"
+
+    payload = {"q": topic}
+
+    headers = {
+        "X-API-KEY": "1b3dcdb7ee679d34ce513e2a1177db3f81144a32",
+        "Content-Type": "application/json"
+    }
+
+    res = requests.post(url, json=payload, headers=headers)
+    data = res.json()
+
+    videos = data.get("videos", [])
+
+    formatted = []
+
+    for v in videos[:5]:  # limit results
+        formatted.append({
+            "title": v.get("title"),
+            "link": v.get("link"),
+            "channel": v.get("channel"),
+            "duration": v.get("duration"),
+        })
+
+    return {
+        "topic": topic,
+        "results": formatted
+    }
+
 
 search = DuckDuckGoSearchRun()
-tools = [search_pdf, search_youtube, search, recommend_youtube]
+tools = [search_pdf, search_youtube, recommend_youtube]
 llm_with_tools = llm.bind_tools(tools)
 
 
